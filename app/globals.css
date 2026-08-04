@@ -170,16 +170,48 @@
   100% { transform: translateX(100%); }
 }
 
+@keyframes magic-generating-overlay {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes magic-generate-scan {
+  from { transform: translateX(-180%); }
+  to { transform: translateX(480%); }
+}
+
+@keyframes magic-generate-words {
+  0%, 18% { transform: translateY(0); }
+  25%, 43% { transform: translateY(-1.75rem); }
+  50%, 68% { transform: translateY(-3.5rem); }
+  75%, 93% { transform: translateY(-5.25rem); }
+  100% { transform: translateY(0); }
+}
+
+@keyframes magic-generate-progress {
+  0% { transform: translateX(-110%); }
+  55% { transform: translateX(120%); }
+  100% { transform: translateX(250%); }
+}
+
 .magic-editor-enter { animation: magic-editor-enter 450ms cubic-bezier(.2,.8,.2,1) both; }
 .magic-image-land { animation: magic-image-land 700ms cubic-bezier(.16,1,.3,1) 80ms both; }
 .magic-mask-enter { animation: magic-mask-enter 220ms ease-out both; }
 .magic-upload-pop { animation: magic-upload-pop 350ms cubic-bezier(.16,1,.3,1) both; }
 .magic-progress { animation: magic-progress 1.15s ease-in-out infinite; }
+.magic-generating-overlay { animation: magic-generating-overlay 350ms ease-out both; }
+.magic-generate-scan { animation: magic-generate-scan 2.4s ease-in-out infinite; }
+.magic-generate-words { animation: magic-generate-words 7.2s cubic-bezier(.65,0,.35,1) infinite; }
+.magic-generate-progress { animation: magic-generate-progress 1.6s ease-in-out infinite; }
 
 @media (prefers-reduced-motion: reduce) {
   .magic-editor-enter,
   .magic-image-land,
   .magic-mask-enter,
   .magic-upload-pop,
-  .magic-progress { animation: none; }
+  .magic-progress,
+  .magic-generating-overlay,
+  .magic-generate-scan,
+  .magic-generate-words,
+  .magic-generate-progress { animation: none; }
 }

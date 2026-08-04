@@ -2,7 +2,6 @@
 
 import { useAction, useMutation } from 'convex/react'
 import {
-  ArrowLeft,
   Check,
   Download,
   Eraser,
@@ -15,8 +14,8 @@ import {
   WandSparkles,
   X,
 } from 'lucide-react'
-import Link from 'next/link'
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { SiteHeader } from '@/components/site-header'
 import { api } from '@/convex/_generated/api'
 import type { Id } from '@/convex/_generated/dataModel'
 
@@ -24,11 +23,12 @@ type Point = { x: number; y: number; label: 0 | 1 }
 type Candidate = { mask: string; score: number }
 type Operation = 'remove' | 'replace' | 'retouch'
 type ImageState = { blob: Blob; url: string; width: number; height: number; name: string }
+type ImageSnapshot = Omit<ImageState, 'url'>
 
 const OPERATIONS: Array<{ id: Operation; label: string; icon: typeof Eraser; hint: string }> = [
   { id: 'remove', label: 'Remove', icon: Eraser, hint: 'Erase it and rebuild the background' },
   { id: 'replace', label: 'Replace', icon: Sparkles, hint: 'Swap it for something new' },
-  { id: 'retouch', label: 'Retouch', icon: WandSparkles, hint: 'Change color, texture, or details' },
+  { id: 'retouch', label: 'Retouch', icon: WandSparkles, hint: 'Change pose, color, texture, or details' },
 ]
 
 function messageFromError(error: unknown) {
@@ -61,6 +61,14 @@ async function normalizeImage(file: File): Promise<ImageState> {
   return { blob, url: URL.createObjectURL(blob), width, height, name: file.name }
 }
 
+async function imageStateFromBlob(blob: Blob, name: string): Promise<ImageState> {
+  const bitmap = await createImageBitmap(blob)
+  const width = bitmap.width
+  const height = bitmap.height
+  bitmap.close()
+  return { blob, url: URL.createObjectURL(blob), width, height, name }
+}
+
 async function createEditMask(maskUrl: string, width: number, height: number) {
   const image = new Image()
   image.src = maskUrl
@@ -81,6 +89,100 @@ async function createEditMask(maskUrl: string, width: number, height: number) {
   }
   context.putImageData(pixels, 0, 0)
   return canvasBlob(canvas)
+}
+
+async function createSubjectReference(maskUrl: string, source: ImageState) {
+  const maskImage = new Image()
+  maskImage.src = maskUrl
+  const [sourceImage] = await Promise.all([createImageBitmap(source.blob), maskImage.decode()])
+
+  try {
+    const maskCanvas = document.createElement('canvas')
+    maskCanvas.width = source.width
+    maskCanvas.height = source.height
+    const maskContext = maskCanvas.getContext('2d', { willReadFrequently: true })
+    if (!maskContext) throw new Error('Canvas is unavailable in this browser')
+    maskContext.drawImage(maskImage, 0, 0, source.width, source.height)
+    const maskPixels = maskContext.getImageData(0, 0, source.width, source.height)
+
+    let left = source.width
+    let top = source.height
+    let right = -1
+    let bottom = -1
+    for (let y = 0; y < source.height; y += 1) {
+      for (let x = 0; x < source.width; x += 1) {
+        if (maskPixels.data[(y * source.width + x) * 4 + 3] <= 20) continue
+        left = Math.min(left, x)
+        top = Math.min(top, y)
+        right = Math.max(right, x)
+        bottom = Math.max(bottom, y)
+      }
+    }
+    if (right < left || bottom < top) throw new Error('The selected subject could not be prepared')
+
+    const subjectWidth = right - left + 1
+    const subjectHeight = bottom - top + 1
+    const padding = Math.max(12, Math.round(Math.max(subjectWidth, subjectHeight) * 0.12))
+    const cropLeft = Math.max(0, left - padding)
+    const cropTop = Math.max(0, top - padding)
+    const cropRight = Math.min(source.width, right + padding + 1)
+    const cropBottom = Math.min(source.height, bottom + padding + 1)
+    const cropWidth = cropRight - cropLeft
+    const cropHeight = cropBottom - cropTop
+    const scale = Math.min(1, 1024 / Math.max(cropWidth, cropHeight))
+    const outputWidth = Math.max(1, Math.round(cropWidth * scale))
+    const outputHeight = Math.max(1, Math.round(cropHeight * scale))
+
+    const referenceCanvas = document.createElement('canvas')
+    referenceCanvas.width = outputWidth
+    referenceCanvas.height = outputHeight
+    const referenceContext = referenceCanvas.getContext('2d')
+    if (!referenceContext) throw new Error('Canvas is unavailable in this browser')
+    referenceContext.drawImage(
+      sourceImage,
+      cropLeft,
+      cropTop,
+      cropWidth,
+      cropHeight,
+      0,
+      0,
+      outputWidth,
+      outputHeight,
+    )
+
+    const alphaCanvas = document.createElement('canvas')
+    alphaCanvas.width = outputWidth
+    alphaCanvas.height = outputHeight
+    const alphaContext = alphaCanvas.getContext('2d', { willReadFrequently: true })
+    if (!alphaContext) throw new Error('Canvas is unavailable in this browser')
+    alphaContext.drawImage(
+      maskImage,
+      cropLeft,
+      cropTop,
+      cropWidth,
+      cropHeight,
+      0,
+      0,
+      outputWidth,
+      outputHeight,
+    )
+    const alphaPixels = alphaContext.getImageData(0, 0, outputWidth, outputHeight)
+    for (let index = 0; index < alphaPixels.data.length; index += 4) {
+      const selected = alphaPixels.data[index + 3] > 20
+      alphaPixels.data[index] = 255
+      alphaPixels.data[index + 1] = 255
+      alphaPixels.data[index + 2] = 255
+      alphaPixels.data[index + 3] = selected ? 255 : 0
+    }
+    alphaContext.putImageData(alphaPixels, 0, 0)
+
+    referenceContext.globalCompositeOperation = 'destination-in'
+    referenceContext.drawImage(alphaCanvas, 0, 0)
+    referenceContext.globalCompositeOperation = 'source-over'
+    return canvasBlob(referenceCanvas)
+  } finally {
+    sourceImage.close()
+  }
 }
 
 function parseSegmentResult(value: unknown): { candidates: Candidate[] } {
@@ -109,10 +211,7 @@ function UploadPanel({ onFile }: { onFile: (file: File) => void }) {
       <div aria-hidden className="pointer-events-none absolute -right-32 top-0 size-[34rem] rounded-full border-[90px] border-white/[0.025]" />
       <div aria-hidden className="pointer-events-none absolute -left-52 bottom-0 size-[30rem] rounded-full border-[70px] border-brand-green/[0.045]" />
       <div className="relative mx-auto w-full max-w-5xl text-center">
-        <div className="mx-auto inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.07] px-4 py-2 text-xs font-bold uppercase tracking-[0.16em] text-brand-green">
-          <WandSparkles className="size-4" /> AI-powered precision editing
-        </div>
-        <h1 className="mx-auto mt-6 max-w-3xl text-balance text-4xl font-extrabold leading-[1.08] text-white sm:text-6xl">
+        <h1 className="mx-auto max-w-3xl text-balance text-4xl font-extrabold leading-[1.08] text-white sm:text-6xl">
           Change anything.<br /><span className="text-brand-green">Keep everything you love.</span>
         </h1>
         <p className="mx-auto mt-5 max-w-2xl text-pretty text-base leading-7 text-white/70 sm:text-lg">
@@ -178,7 +277,8 @@ export function MagicEditStudio() {
   const [instruction, setInstruction] = useState('')
   const [busy, setBusy] = useState<'upload' | 'segment' | 'edit' | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [resultUrl, setResultUrl] = useState<string | null>(null)
+  const [resultImage, setResultImage] = useState<ImageState | null>(null)
+  const [history, setHistory] = useState<ImageSnapshot[]>([])
   const [compare, setCompare] = useState(50)
   const [hover, setHover] = useState<{ x: number; y: number } | null>(null)
   const [hoverBusy, setHoverBusy] = useState(false)
@@ -188,8 +288,10 @@ export function MagicEditStudio() {
   const hoverSequenceRef = useRef(0)
   const lastHoverKeyRef = useRef('')
   const hoverCacheRef = useRef(new Map<string, Candidate[]>())
+  const resultUrl = resultImage?.url ?? null
 
   useEffect(() => () => { if (image) URL.revokeObjectURL(image.url) }, [image])
+  useEffect(() => () => { if (resultImage) URL.revokeObjectURL(resultImage.url) }, [resultImage])
   useEffect(() => () => {
     if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current)
     hoverAbortRef.current?.abort()
@@ -206,7 +308,8 @@ export function MagicEditStudio() {
       })
       setPoints([])
       setCandidates([])
-      setResultUrl(null)
+      setResultImage(null)
+      setHistory([])
       hoverCacheRef.current.clear()
       lastHoverKeyRef.current = ''
     } catch (caught) {
@@ -340,10 +443,20 @@ export function MagicEditStudio() {
     setBusy('edit')
     setError(null)
     try {
-      const maskBlob = await createEditMask(`data:image/png;base64,${candidate.mask}`, image.width, image.height)
-      const [imageId, maskId] = await Promise.all([uploadBlob(image.blob), uploadBlob(maskBlob)])
-      const result = await runEdit({ imageId, maskId, operation, instruction })
-      setResultUrl(result.url)
+      const maskUrl = `data:image/png;base64,${candidate.mask}`
+      const [maskBlob, referenceBlob] = await Promise.all([
+        createEditMask(maskUrl, image.width, image.height),
+        operation === 'retouch' ? createSubjectReference(maskUrl, image) : Promise.resolve(null),
+      ])
+      const [imageId, maskId, referenceId] = await Promise.all([
+        uploadBlob(image.blob),
+        uploadBlob(maskBlob),
+        referenceBlob ? uploadBlob(referenceBlob) : Promise.resolve(undefined),
+      ])
+      const result = await runEdit({ imageId, maskId, referenceId, operation, instruction })
+      const response = await fetch(result.url)
+      if (!response.ok) throw new Error('The edited image could not be loaded')
+      setResultImage(await imageStateFromBlob(await response.blob(), `edited-${image.name}`))
       setCompare(50)
     } catch (caught) {
       setError(messageFromError(caught))
@@ -357,7 +470,8 @@ export function MagicEditStudio() {
     setImage(null)
     setPoints([])
     setCandidates([])
-    setResultUrl(null)
+    setResultImage(null)
+    setHistory([])
     setError(null)
     setHover(null)
     setHoverBusy(false)
@@ -365,33 +479,47 @@ export function MagicEditStudio() {
     lastHoverKeyRef.current = ''
   }
 
+  const clearSelection = () => {
+    setPoints([])
+    setCandidates([])
+    setInstruction('')
+    setHover(null)
+    setHoverBusy(false)
+    hoverCacheRef.current.clear()
+    lastHoverKeyRef.current = ''
+  }
+
+  const keepEditingResult = () => {
+    if (!image || !resultImage) return
+    setHistory((current) => [...current, {
+      blob: image.blob,
+      width: image.width,
+      height: image.height,
+      name: image.name,
+    }])
+    setImage({ ...resultImage, url: URL.createObjectURL(resultImage.blob) })
+    setResultImage(null)
+    clearSelection()
+  }
+
+  const undoChanges = () => {
+    if (resultImage) {
+      setResultImage(null)
+      setCompare(50)
+      return
+    }
+    const previous = history.at(-1)
+    if (!previous) return
+    setHistory((current) => current.slice(0, -1))
+    setImage({ ...previous, url: URL.createObjectURL(previous.blob) })
+    clearSelection()
+  }
+
   const selectedCandidate = candidates[candidateIndex]
 
   return (
     <div className="min-h-screen bg-[#f4f5f8] text-brand-navy">
-      <header className="relative z-40">
-        <div className="bg-brand-green">
-          <div className="mx-auto flex h-[30px] max-w-7xl items-center justify-end gap-6 px-4 text-[11px] font-semibold text-white sm:px-6 lg:px-8">
-            <span>Private local selection</span><span className="size-1 rounded-full bg-white/60" /><span>OpenAI image editing</span>
-          </div>
-        </div>
-        <div className="border-b border-black/5 bg-white">
-          <div className="mx-auto flex h-[73px] max-w-7xl items-center justify-between px-4 sm:px-6 lg:px-8">
-            <div className="flex items-center gap-4">
-              <Link href="/" aria-label="Back home" className="flex size-9 items-center justify-center rounded-full border border-brand-navy/10 text-brand-navy transition-all hover:-translate-x-0.5 hover:border-brand-green hover:text-brand-green-dark">
-                <ArrowLeft className="size-4" />
-              </Link>
-              <Link href="/" className="text-xl font-extrabold tracking-tight sm:text-[26px]"><span className="text-brand-green">PHOTO</span> <span className="text-brand-gray">FINALE</span></Link>
-              <span className="hidden h-6 w-px bg-black/10 sm:block" />
-              <span className="hidden rounded-full bg-accent-pink/10 px-3 py-1 text-[10px] font-bold uppercase tracking-[0.16em] text-accent-pink sm:inline-flex">Magic Edit</span>
-            </div>
-            <div className="flex items-center gap-2 rounded-full bg-brand-green/10 px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider text-brand-green-dark sm:text-xs sm:normal-case sm:tracking-normal">
-              <span className="relative flex size-2"><span className="absolute inline-flex size-full animate-ping rounded-full bg-brand-green opacity-50" /><span className="relative inline-flex size-2 rounded-full bg-brand-green" /></span>
-              <span className="hidden sm:inline">SAM 3 ready · </span>RTX 5090
-            </div>
-          </div>
-        </div>
-      </header>
+      <SiteHeader />
 
       {error && (
         <div className="fixed left-1/2 top-28 z-50 flex w-[min(92vw,620px)] -translate-x-1/2 items-center gap-3 rounded-2xl border border-red-200 bg-white p-4 text-sm text-red-700 shadow-xl">
@@ -409,6 +537,11 @@ export function MagicEditStudio() {
                 <p className="mt-0.5 text-xs text-muted-foreground">{resultUrl ? 'Drag the slider to compare before and after' : points.length ? 'Click again with include or exclude to refine the edge' : candidates.length ? 'Move around to explore, or click once to pin this selection' : 'Pause over an object and SAM 3 will trace it automatically'}</p>
               </div>
               <div className="flex items-center gap-2">
+                {!resultUrl && history.length > 0 && (
+                  <button type="button" disabled={!!busy} onClick={undoChanges} className="inline-flex items-center gap-2 rounded-full border border-brand-navy/10 bg-white px-4 py-2.5 text-xs font-bold shadow-sm transition-colors hover:border-accent-pink hover:text-accent-pink disabled:opacity-40">
+                    <RotateCcw className="size-3.5" /> Undo changes
+                  </button>
+                )}
                 {!resultUrl && points.length > 0 && (
                   <button type="button" disabled={!!busy} onClick={() => {
                     const next = points.slice(0, -1)
@@ -422,10 +555,9 @@ export function MagicEditStudio() {
               </div>
             </div>
 
-            <div className="relative flex flex-1 items-center justify-center overflow-hidden rounded-[2rem] bg-brand-navy p-3 shadow-2xl shadow-brand-navy/15 ring-1 ring-black/5 sm:p-8">
-              <div className="absolute inset-0 opacity-[0.045] [background-image:linear-gradient(#fff_1px,transparent_1px),linear-gradient(90deg,#fff_1px,transparent_1px)] [background-size:32px_32px]" />
-              <span className="absolute left-5 top-5 rounded-full border border-white/10 bg-white/[0.07] px-3 py-1.5 text-[10px] font-bold uppercase tracking-widest text-white/65">Hover to select</span>
-              <div className="magic-image-land relative z-10 max-h-[72vh] max-w-full overflow-hidden rounded-xl shadow-2xl ring-1 ring-white/10" style={{ aspectRatio: `${image.width}/${image.height}` }}>
+            <div className="relative flex flex-1 items-center justify-center overflow-hidden rounded-[2rem] bg-[#e5e7ed] shadow-inner ring-1 ring-black/5">
+              <div className="absolute inset-0 opacity-40 [background-image:linear-gradient(45deg,#d7dae2_25%,transparent_25%),linear-gradient(-45deg,#d7dae2_25%,transparent_25%),linear-gradient(45deg,transparent_75%,#d7dae2_75%),linear-gradient(-45deg,transparent_75%,#d7dae2_75%)] [background-position:0_0,0_12px,12px_-12px,-12px_0] [background-size:24px_24px]" />
+              <div className="magic-image-land relative z-10 max-h-[76vh] max-w-full overflow-hidden rounded-2xl bg-brand-navy shadow-2xl shadow-brand-navy/25 ring-1 ring-white/10" style={{ aspectRatio: `${image.width}/${image.height}` }}>
                 <button
                   type="button"
                   aria-label="Hover over an object to preview its selection; click to pin it"
@@ -437,10 +569,10 @@ export function MagicEditStudio() {
                     lastHoverKeyRef.current = ''
                     setHover(null)
                   }}
-                  className="relative block h-full max-h-[72vh] w-full max-w-full cursor-crosshair disabled:cursor-default"
+                  className="relative block h-full max-h-[76vh] w-full max-w-full cursor-crosshair disabled:cursor-default"
                 >
                   {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={image.url} alt="Image being edited" draggable={false} className="block max-h-[72vh] max-w-full select-none object-contain transition-[filter,transform] duration-700" />
+                  <img src={image.url} alt="Image being edited" draggable={false} className={`block max-h-[76vh] max-w-full select-none object-contain transition-all duration-700 ${busy === 'edit' ? 'scale-[1.035] blur-[7px] saturate-75 brightness-75' : ''}`} />
                   {selectedCandidate && !resultUrl && (
                     // eslint-disable-next-line @next/next/no-img-element
                     <img key={selectionVersion} src={`data:image/png;base64,${selectedCandidate.mask}`} alt="Selected area" className="magic-mask-enter pointer-events-none absolute inset-0 size-full object-fill" />
@@ -457,6 +589,30 @@ export function MagicEditStudio() {
                   )}
                   {busy === 'segment' && <span className="absolute inset-0 grid place-items-center bg-brand-navy/30 backdrop-blur-[2px]"><span className="inline-flex items-center gap-3 rounded-full bg-white px-5 py-3 text-sm font-bold shadow-xl"><LoaderCircle className="size-5 animate-spin text-accent-pink" /> SAM 3 is tracing…</span></span>}
                 </button>
+
+                {busy === 'edit' && (
+                  <div className="magic-generating-overlay absolute inset-0 z-30 flex items-center justify-center overflow-hidden bg-brand-navy/35 backdrop-blur-[2px]">
+                    <div aria-hidden className="magic-generate-scan absolute inset-y-0 w-1/3 bg-gradient-to-r from-transparent via-white/20 to-transparent blur-xl" />
+                    <div className="relative flex max-w-xs flex-col items-center px-6 text-center text-white">
+                      <span className="relative grid size-16 place-items-center rounded-2xl border border-white/20 bg-white/10 shadow-2xl backdrop-blur-md">
+                        <WandSparkles className="size-7 text-brand-green" />
+                        <span className="absolute -inset-2 -z-10 animate-ping rounded-3xl border border-brand-green/30" />
+                      </span>
+                      <div className="mt-6 h-7 overflow-hidden">
+                        <div className="magic-generate-words">
+                          <p className="h-7 text-lg font-extrabold">Generating your edit…</p>
+                          <p className="h-7 text-lg font-extrabold">Rebuilding the pixels…</p>
+                          <p className="h-7 text-lg font-extrabold">Blending it naturally…</p>
+                          <p className="h-7 text-lg font-extrabold">Adding the final polish…</p>
+                        </div>
+                      </div>
+                      <p className="mt-2 text-xs leading-5 text-white/60">OpenAI is transforming only your selected area</p>
+                      <span className="mt-6 h-1 w-52 overflow-hidden rounded-full bg-white/15">
+                        <span className="magic-generate-progress block h-full w-2/5 rounded-full bg-brand-green shadow-[0_0_12px_rgba(140,198,63,0.8)]" />
+                      </span>
+                    </div>
+                  </div>
+                )}
 
                 {resultUrl && (
                   <div className="absolute inset-0 overflow-hidden">
@@ -481,7 +637,8 @@ export function MagicEditStudio() {
                 <p className="mt-3 text-sm leading-6 text-muted-foreground">Your finished image is ready. Compare it on the canvas, then download the full-resolution result.</p>
                 <div className="mt-8 rounded-2xl bg-brand-green/10 p-4 text-xs leading-5 text-brand-green-dark"><span className="font-bold">Print-ready result</span><br />Your original dimensions and quality are preserved.</div>
                 <a href={resultUrl} download="magic-edit.png" className="mt-6 inline-flex items-center justify-center gap-2 rounded-full bg-brand-navy px-5 py-4 text-sm font-bold text-white shadow-lg shadow-brand-navy/20 transition-all hover:-translate-y-0.5 hover:bg-accent-pink"><Download className="size-4" /> Download PNG</a>
-                <button type="button" onClick={() => setResultUrl(null)} className="mt-3 rounded-full border border-brand-navy/10 px-5 py-3.5 text-sm font-bold transition-colors hover:border-brand-green hover:text-brand-green-dark">Keep editing selection</button>
+                <button type="button" onClick={keepEditingResult} className="mt-3 rounded-full border border-brand-navy/10 px-5 py-3.5 text-sm font-bold transition-colors hover:border-brand-green hover:text-brand-green-dark">Keep editing selection</button>
+                <button type="button" onClick={undoChanges} className="mt-3 inline-flex items-center justify-center gap-2 rounded-full px-5 py-3 text-sm font-bold text-muted-foreground transition-colors hover:bg-red-50 hover:text-red-600"><RotateCcw className="size-4" /> Undo changes</button>
               </div>
             ) : (
               <div className="space-y-7">
@@ -530,6 +687,11 @@ export function MagicEditStudio() {
                 <div className={candidates.length ? '' : 'pointer-events-none opacity-40'}>
                   <div className="flex items-center gap-3"><span className="grid size-8 place-items-center rounded-full bg-brand-navy text-xs font-bold text-white">3</span><label htmlFor="instruction" className="text-sm font-bold">{operation === 'remove' ? 'Add guidance' : 'Describe the change'}</label></div>
                   <textarea id="instruction" value={instruction} onChange={(event) => setInstruction(event.target.value)} maxLength={1500} rows={4} placeholder={operation === 'replace' ? 'e.g. Replace it with a vase of wildflowers' : operation === 'retouch' ? 'e.g. Make the jacket deep navy blue' : 'Optional: Keep the wall texture seamless'} className="mt-4 w-full resize-none rounded-2xl border border-brand-navy/10 bg-[#f7f8fa] p-4 text-sm outline-none transition-all placeholder:text-muted-foreground/60 focus:border-accent-pink/50 focus:bg-white focus:ring-4 focus:ring-accent-pink/10" />
+                  {operation === 'retouch' && selectedCandidate && (
+                    <p className="mt-2 flex items-center gap-1.5 text-[10px] font-medium text-brand-green-dark">
+                      <Check className="size-3" /> Selected subject attached as an identity reference
+                    </p>
+                  )}
                   <div className="mt-2 text-right text-[10px] text-brand-gray">{instruction.length} / 1500</div>
                   <button type="button" disabled={!selectedCandidate || !!busy} onClick={() => void submitEdit()} className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-full bg-accent-pink px-5 py-4 text-sm font-bold text-white shadow-lg shadow-accent-pink/25 transition-all hover:-translate-y-0.5 hover:bg-[#dc3d7d] disabled:translate-y-0 disabled:opacity-40">
                     {busy === 'edit' ? <><LoaderCircle className="size-4 animate-spin" /> OpenAI is editing…</> : <><WandSparkles className="size-4" /> Apply Magic Edit</>}

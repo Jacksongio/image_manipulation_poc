@@ -69,10 +69,10 @@ export function ToolsSection() {
               <h3 className="mt-5 text-lg font-bold text-brand-navy">{tool.title}</h3>
               <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{tool.description}</p>
               <a
-                href={tool.id === "magic-edit" ? "/magic-edit" : "#contact"}
+                href={tool.id === "magic-edit" ? "/magic-edit" : tool.id === "art-style" ? "/art-style" : tool.id === "image-upscaler" ? "/image-upscaler" : "#contact"}
                 className={`mt-4 inline-flex text-sm font-bold ${tool.iconColor} opacity-0 transition-opacity group-hover:opacity-100`}
               >
-                {tool.id === "magic-edit" ? "Open editor" : "Learn more"} &rarr;
+                {tool.id === "magic-edit" || tool.id === "art-style" || tool.id === "image-upscaler" ? "Open editor" : "Learn more"} &rarr;
               </a>
             </article>
           ))}

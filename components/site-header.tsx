@@ -2,14 +2,19 @@ import { Search } from "lucide-react"
 
 function Logo() {
   return (
-    <a href="#" className="flex items-baseline gap-2 text-2xl font-extrabold tracking-tight md:text-[28px]">
+    <a href="/" className="flex items-baseline gap-2 text-2xl font-extrabold tracking-tight md:text-[28px]">
       <span className="text-brand-green">PHOTO</span>
       <span className="text-brand-gray">FINALE</span>
     </a>
   )
 }
 
-const NAV_LINKS = ["Magic Edit", "Art Style", "Image Upscaler", "Border Expander"]
+const NAV_LINKS = [
+  { label: "Magic Edit", href: "/magic-edit" },
+  { label: "Art Style", href: "/art-style" },
+  { label: "Image Upscaler", href: "/image-upscaler" },
+  { label: "Border Expander", href: "/#border-expander" },
+]
 
 export function SiteHeader() {
   return (
@@ -34,11 +39,11 @@ export function SiteHeader() {
           <div className="hidden items-center gap-8 lg:flex">
             {NAV_LINKS.map((link) => (
               <a
-                key={link}
-                href={`#${link.toLowerCase().replace(/\s+/g, "-")}`}
+                key={link.label}
+                href={link.href}
                 className="text-sm font-semibold text-brand-navy transition-colors hover:text-brand-green"
               >
-                {link}
+                {link.label}
               </a>
             ))}
             <button

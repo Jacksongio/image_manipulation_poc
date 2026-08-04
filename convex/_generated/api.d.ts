@@ -8,7 +8,9 @@
  * @module
  */
 
+import type * as artStyle from "../artStyle.js";
 import type * as files from "../files.js";
+import type * as imageUpscaler from "../imageUpscaler.js";
 import type * as magicEdit from "../magicEdit.js";
 
 import type {
@@ -18,7 +20,9 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  artStyle: typeof artStyle;
   files: typeof files;
+  imageUpscaler: typeof imageUpscaler;
   magicEdit: typeof magicEdit;
 }>;
 

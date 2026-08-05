@@ -7,13 +7,24 @@ __v0_jsx-dev-runtime.ts
 .vercel/
 
 # Environment variables
-.env*.local
+.env
+.env.*
+!.env.example
 
 # Common ignores
 node_modules
 .next/
 .DS_Store
-.venv-sam3/
+# Python environments and caches
+.venv*/
+venv/
+vevn/
 __pycache__/
-*.pyc
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
 *.tsbuildinfo
+
+# Downloaded model weights
+backend/models/

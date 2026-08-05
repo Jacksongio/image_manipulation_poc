@@ -1,0 +1,1 @@
+"""Photo Finale FastAPI backend."""

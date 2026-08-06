@@ -1,0 +1,48 @@
+name: photo-finale
+
+# One container serves both halves of the app: the Next.js UI is exported to
+# static files at build time and mounted under FastAPI, so the browser talks to
+# the same origin that served it and no CORS configuration is involved.
+#
+#   docker compose up -d      build if needed, then start in the background
+#   docker compose down       stop and remove the container
+#
+# GPU tools (SAM 3 segmentation, Faithful upscaling) need the NVIDIA container
+# runtime, which this file deliberately does not require. To enable them:
+#
+#   docker compose -f compose.yaml -f compose.gpu.yaml up -d
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: photo-finale:latest
+    restart: unless-stopped
+    ports:
+      - "${PORT:-8008}:8008"
+    env_file:
+      # Optional so the stack still starts before anyone writes a .env; the
+      # CPU tools need no credentials at all.
+      - path: backend/.env
+        required: false
+    environment:
+      # The UI calls its own origin, so no cross-origin allowance is needed.
+      CORS_ORIGINS: ""
+    volumes:
+      # The gated SAM 3 checkpoint is a large download; keep it across restarts.
+      - hf-cache:/root/.cache/huggingface
+    healthcheck:
+      test:
+        - CMD
+        - python3
+        - -c
+        - import urllib.request; urllib.request.urlopen("http://127.0.0.1:8008/health").read()
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      # The image is large and Torch is slow to import, so allow a long warm-up.
+      start_period: 90s
+
+volumes:
+  hf-cache:

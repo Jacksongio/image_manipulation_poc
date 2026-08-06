@@ -10,9 +10,9 @@ const poppins = Poppins({
 })
 
 export const metadata: Metadata = {
-  title: 'Photo Finale — Smarter AI Photo Tools',
+  title: 'Photo Finale — Photo Editor',
   description:
-    'Photo Finale delivers powerful, AI-driven photo editing tools — Magic Edit, Art Style, Image Upscaler, and Border Expander — that redefine how businesses create and sell photo products.',
+    'Upload a photo and edit it in one place: crop, adjust, filter, letter, and retouch with Magic Edit, Art Style, Upscaler, and Border Expander.',
   generator: 'v0.app',
   icons: {
     icon: [
@@ -34,11 +34,8 @@ export const metadata: Metadata = {
 }
 
 export const viewport: Viewport = {
-  colorScheme: 'light dark',
-  themeColor: [
-    { media: '(prefers-color-scheme: light)', color: 'white' },
-    { media: '(prefers-color-scheme: dark)', color: 'black' },
-  ],
+  colorScheme: 'dark',
+  themeColor: '#0d0d0d',
 }
 
 export default function RootLayout({
@@ -47,8 +44,8 @@ export default function RootLayout({
   children: React.ReactNode
 }>) {
   return (
-    <html lang="en" className={`${poppins.variable} bg-background`}>
-      <body className="font-sans antialiased">
+    <html lang="en" className={`dark ${poppins.variable} bg-ed-stage`}>
+      <body className="overflow-hidden font-sans antialiased">
         {children}
         {process.env.NODE_ENV === 'production' && <Analytics />}
       </body>

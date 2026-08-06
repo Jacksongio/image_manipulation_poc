@@ -7,6 +7,10 @@
     "setup:backend": "bash backend/scripts/setup.sh",
     "build": "pnpm --dir frontend build",
     "lint": "pnpm --dir frontend lint",
-    "typecheck": "pnpm --dir frontend exec tsc --noEmit"
+    "typecheck": "pnpm --dir frontend exec tsc --noEmit",
+    "docker:up": "docker compose up -d",
+    "docker:up:gpu": "docker compose -f compose.yaml -f compose.gpu.yaml up -d",
+    "docker:down": "docker compose down",
+    "docker:logs": "docker compose logs -f"
   }
 }

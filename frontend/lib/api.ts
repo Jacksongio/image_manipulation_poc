@@ -1,7 +1,10 @@
-const configuredUrl = process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, '')
+// Unset means the local dev backend; an empty string means same-origin
+// (the single-container deployment where FastAPI serves the frontend).
+const rawUrl = process.env.NEXT_PUBLIC_API_URL
+const configuredUrl = rawUrl === undefined ? 'http://127.0.0.1:8008' : rawUrl.replace(/\/$/, '')
 
 export function backendUrl(path: string) {
-  return `${configuredUrl ?? 'http://127.0.0.1:8008'}${path}`
+  return `${configuredUrl}${path}`
 }
 
 export async function apiFetch(path: string, init?: RequestInit) {

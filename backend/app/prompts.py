@@ -46,6 +46,7 @@ def magic_edit_prompt(operation: str, instruction: str) -> str:
 - Image 1 is the original source image and must remain the basis of the output.
 - Image 2 is the SAM3 segmentation mask aligned exactly with Image 1.
 - WHITE mask pixels are the only editable region. BLACK mask pixels are locked and immutable.
+- This is a local image edit, never a new image generation. Start from Image 1 and preserve it exactly.
 - Perform only the requested change and confine it to the white region.
 - Copy every black-mask region from Image 1 into the output unchanged, pixel-for-pixel. Do not regenerate, reinterpret, retouch, color-grade, relight, sharpen, blur, move, crop, resize, or restyle any locked region.
 - Keep the original canvas dimensions, aspect ratio, crop, camera position, composition, background, lighting, colors, textures, shadows, people, objects, and spatial layout unchanged outside the white region.
@@ -57,7 +58,7 @@ def magic_edit_prompt(operation: str, instruction: str) -> str:
 
 Remove the object inside the white SAM3 selection completely, then reconstruct the newly exposed area as a seamless continuation of the real background visible around the selection. Infer the hidden background from all surrounding context and match its perspective, geometry, depth, lighting, shadows, reflections, colors, texture, detail, focus, and image grain. The result must look as though the selected object was never present: no empty or transparent area, blur patch, smudge, repeated texture, halo, ghosting, outline, hard edge, or visible mask boundary. Reconstruct only within the white selection and preserve the locked black region exactly. Additional guidance: {instruction or 'None.'}
 
-Return Image 1 with only the selected object removed. Everything outside the white mask must remain exactly the same."""
+Return Image 1 with only the selected object removed. Do not substitute it with another object, decoration, picture frame, artwork, person, or plausible alternative. Everything outside the white mask must remain exactly the same."""
     if operation == "retouch":
         return f"""{selection_contract}
 
@@ -65,9 +66,9 @@ Image 3 is an isolated reference of the exact subject selected by SAM3. Apply th
 
 Keep the exact same individual shown in Image 3—not a similar replacement. Preserve its species or breed, face, eyes, colors, markings, body proportions, texture, accessories, and all identity-defining details unless the requested change explicitly targets one of those traits. Do not add another copy of the subject.
 
-Return Image 1 with only the requested change inside the white mask. Everything outside the white mask must remain exactly the same."""
+Return Image 1 with only the requested touch-up inside the white mask. Everything outside the white mask must remain exactly the same."""
     return f"""{selection_contract}
 
-Replace only the content inside the white SAM3 selection with the following: {instruction}
+Replace only the content inside the white SAM3 selection with the following: {instruction}. Do not alter, reinterpret, or regenerate anything outside that selection.
 
 Return Image 1 with only the white-mask content replaced. Everything outside the white mask must remain exactly the same."""

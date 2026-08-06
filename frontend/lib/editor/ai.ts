@@ -12,7 +12,6 @@ export type Candidate = { mask: string; score: number }
 export type Operation = 'remove' | 'replace' | 'retouch'
 export type PrintSize = string
 export type Orientation = 'portrait' | 'landscape'
-export type UpscaleMode = 'faithful' | 'ai'
 
 export type BackendHealth = { cuda: boolean; upscalerInstalled: boolean; gpu: string | null }
 
@@ -75,21 +74,24 @@ export async function magicEdit(options: {
   maskUrl: string
   operation: Operation
   instruction: string
+  model: string
 }) {
   const body = new FormData()
   body.set('image', options.image, options.name)
   body.set('mask', await maskBlob(options.maskUrl), 'selection-mask.png')
   body.set('operation', options.operation)
   body.set('instruction', options.instruction)
+  body.set('model', options.model)
   const response = await apiFetch('/magic-edit', { method: 'POST', body })
   return response.blob()
 }
 
-export async function artStyle(image: Blob, name: string, style: string, intensity: string) {
+export async function artStyle(image: Blob, name: string, style: string, intensity: string, model: string) {
   const body = new FormData()
   body.set('image', image, name)
   body.set('style', style)
   body.set('intensity', intensity)
+  body.set('model', model)
   const response = await apiFetch('/art-style', { method: 'POST', body })
   return response.blob()
 }
@@ -97,23 +99,17 @@ export async function artStyle(image: Blob, name: string, style: string, intensi
 export async function upscale(options: {
   image: Blob
   name: string
-  mode: UpscaleMode
   scale: number
   strength: number
 }) {
   const body = new FormData()
   body.set('image', options.image, options.name)
   body.set('scale', String(options.scale))
-  if (options.mode === 'faithful') body.set('strength', String(options.strength))
-  const response = await apiFetch(options.mode === 'faithful' ? '/upscale' : '/ai/upscale', {
-    method: 'POST',
-    body,
-  })
+  body.set('strength', String(options.strength))
+  const response = await apiFetch('/upscale', { method: 'POST', body })
   return {
     blob: await response.blob(),
-    engine:
-      response.headers.get('x-upscale-model') ??
-      (options.mode === 'faithful' ? 'Real-ESRGAN' : 'Gemini'),
+    engine: response.headers.get('x-upscale-model') ?? 'Real-ESRGAN',
     processingTimeMs: Number(response.headers.get('x-processing-time-ms')) || undefined,
   }
 }
@@ -123,11 +119,13 @@ export async function borderExpand(
   name: string,
   printSize: PrintSize,
   orientation: Orientation,
+  model: string,
 ) {
   const body = new FormData()
   body.set('image', image, name)
   body.set('print_size', printSize)
   body.set('orientation', orientation)
+  body.set('model', model)
   const response = await apiFetch('/border-expand', { method: 'POST', body })
   return response.blob()
 }

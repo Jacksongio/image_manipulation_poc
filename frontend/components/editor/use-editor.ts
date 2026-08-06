@@ -31,11 +31,21 @@ export type TextSettings = {
   lineHeight: number
 }
 export type MagicState = {
-  /** Whether the next canvas click adds to or subtracts from the selection. */
-  include: boolean
   points: Point[]
   candidates: Candidate[]
   index: number
+  /** Hovering pauses after the first click; further clicks refine the same mask. */
+  locked: boolean
+}
+
+export type MagicPreview = {
+  beforeUrl: string
+  afterUrl: string
+  afterBlob: Blob
+}
+
+export type BorderExpansionPreview = {
+  targetAspectRatio: number
 }
 
 const ZOOM_STEPS = [0.1, 0.15, 0.25, 0.35, 0.5, 0.66, 0.8, 1, 1.25, 1.5, 2, 3, 4, 6, 8]
@@ -55,14 +65,25 @@ export function useEditor(initialSource: SourceImage, catalog: ToolCatalog, onCl
   const [designColor, setDesignColor] = useState(catalog.colorSwatches[0] ?? '#ffffff')
   const [textSettings, setTextSettings] = useState<TextSettings>(catalog.text.defaults)
   const [magic, setMagic] = useState<MagicState>({
-    include: true,
     points: [],
     candidates: [],
     index: 0,
+    locked: false,
   })
+  const [magicPreview, setMagicPreview] = useState<MagicPreview | null>(null)
+  const [borderExpansionPreview, setBorderExpansionPreview] = useState<BorderExpansionPreview | null>(null)
   const [aspect, setAspect] = useState('custom')
 
   const stageRef = useRef<Konva.Stage>(null)
+
+  useEffect(() => {
+    return () => {
+      if (magicPreview) {
+        URL.revokeObjectURL(magicPreview.beforeUrl)
+        URL.revokeObjectURL(magicPreview.afterUrl)
+      }
+    }
+  }, [magicPreview])
 
   // Python renders everything; this hook only keeps the canvas in step with it.
   const render = useRender(doc)
@@ -365,7 +386,7 @@ export function useEditor(initialSource: SourceImage, catalog: ToolCatalog, onCl
   )
 
   const resetMagic = useCallback(
-    () => setMagic({ include: true, points: [], candidates: [], index: 0 }),
+    () => setMagic({ points: [], candidates: [], index: 0, locked: false }),
     [],
   )
 
@@ -376,11 +397,27 @@ export function useEditor(initialSource: SourceImage, catalog: ToolCatalog, onCl
   )
 
   const replaceSource = useCallback(
-    async (blob: Blob, name: string) => {
+    async (blob: Blob, name: string, options?: { preserveMagicSelection?: boolean }) => {
       const next = await sourceFromBlob(blob, name)
       setSelectedId(null)
       setEditingId(null)
-      resetMagic()
+      if (options?.preserveMagicSelection) {
+        const widthScale = next.width / frame.width
+        const heightScale = next.height / frame.height
+        setMagic((current) => ({
+          ...current,
+          points: current.points.map((point) => ({
+            ...point,
+            x: Math.round(point.x * widthScale),
+            y: Math.round(point.y * heightScale),
+          })),
+          candidates: [],
+          index: 0,
+          locked: current.points.length > 0,
+        }))
+      } else {
+        resetMagic()
+      }
       setAspect('custom')
       update((current) => ({
         ...current,
@@ -396,7 +433,7 @@ export function useEditor(initialSource: SourceImage, catalog: ToolCatalog, onCl
         layers: [],
       }))
     },
-    [resetMagic, update],
+    [frame.height, frame.width, resetMagic, update],
   )
 
   useEffect(() => {
@@ -405,6 +442,7 @@ export function useEditor(initialSource: SourceImage, catalog: ToolCatalog, onCl
       setEditingId(null)
     }
     if (tool !== 'magic-edit') resetMagic()
+    if (tool !== 'border-expander') setBorderExpansionPreview(null)
   }, [tool, resetMagic])
 
   useEffect(() => {
@@ -451,6 +489,10 @@ export function useEditor(initialSource: SourceImage, catalog: ToolCatalog, onCl
     magic,
     setMagic,
     resetMagic,
+    magicPreview,
+    setMagicPreview,
+    borderExpansionPreview,
+    setBorderExpansionPreview,
     stageRef,
     render,
     frame,

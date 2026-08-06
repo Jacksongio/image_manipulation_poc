@@ -73,6 +73,9 @@ export type ToolCatalog = {
     artStyles: ArtStyleInfo[]
     styleIntensities: Option[]
     magicEditOperations: Array<Option & { detail: string }>
+    imageModels?: Array<Option & { detail: string }>
+    /** Temporary compatibility with a catalog served before model selection expanded. */
+    magicEditModels?: Array<Option & { detail: string }>
     printSizes: PrintSizeInfo[]
     upscaleScales: number[]
   }

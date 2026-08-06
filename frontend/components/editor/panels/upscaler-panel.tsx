@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { type BackendHealth, fetchHealth, type UpscaleMode, upscale } from '@/lib/editor/ai'
+import { type BackendHealth, fetchHealth, upscale } from '@/lib/editor/ai'
 import { fetchUpscalePlans, type UpscalePlan } from '@/lib/editor/tools-api'
 import { cn } from '@/lib/utils'
 import { PanelButton, PanelHint, PanelShell, SegmentedControl } from '../ui/panel'
@@ -9,23 +9,14 @@ import { SliderRow } from '../ui/slider-row'
 import type { Editor } from '../use-editor'
 import { useAiRun } from './use-ai-run'
 
-const MODES: Array<{ id: UpscaleMode; name: string }> = [
-  { id: 'faithful', name: 'Faithful' },
-  { id: 'ai', name: 'AI Restore' },
-]
-
 export function UpscalerPanel({
   editor,
-  mode,
-  setMode,
   scale,
   setScale,
   strength,
   setStrength,
 }: {
   editor: Editor
-  mode: UpscaleMode
-  setMode: (value: UpscaleMode) => void
   scale: number
   setScale: (value: number) => void
   strength: number
@@ -59,7 +50,7 @@ export function UpscalerPanel({
     }
   }, [width, height])
 
-  const target = plans.find((plan) => plan.mode === mode && plan.scale === scale)
+  const target = plans.find((plan) => plan.mode === 'faithful' && plan.scale === scale)
   const localReady = health?.cuda && health.upscalerInstalled
   const size = target ? `${target.width} × ${target.height}` : '…'
 
@@ -68,22 +59,18 @@ export function UpscalerPanel({
       <div className="mb-3 flex items-center gap-1.5">
         <span className={cn('size-1.5 rounded-full', localReady ? 'bg-[#39c46e]' : 'bg-[#f5883f]')} />
         <span className="text-[9px] text-ed-dim">
-          {localReady ? health?.gpu ?? 'Local GPU ready' : 'Local upscaler unavailable — use AI Restore'}
+          {localReady ? health?.gpu ?? 'Local GPU ready' : 'Local upscaler unavailable'}
         </span>
       </div>
 
-      <SegmentedControl label="Engine" value={mode} options={MODES} onChange={setMode} />
-
-      {mode === 'faithful' ? (
-        <SliderRow
-          label="Restoration Strength"
-          min={25}
-          max={100}
-          step={5}
-          value={Math.round(strength * 100)}
-          onChange={(value) => setStrength(value / 100)}
-        />
-      ) : null}
+      <SliderRow
+        label="Restoration Strength"
+        min={25}
+        max={100}
+        step={5}
+        value={Math.round(strength * 100)}
+        onChange={(value) => setStrength(value / 100)}
+      />
 
       <SegmentedControl
         label="Scale"
@@ -109,13 +96,12 @@ export function UpscalerPanel({
       <div className="mt-3">
         <PanelButton
           tone="accent"
-          disabled={Boolean(editor.busy)}
+          disabled={Boolean(editor.busy) || !localReady}
           onClick={() =>
             run('Upscaling image…', async (flattened) => {
               const result = await upscale({
                 image: flattened,
                 name: editor.doc.source.name,
-                mode,
                 scale,
                 strength,
               })
@@ -128,9 +114,7 @@ export function UpscalerPanel({
       </div>
 
       <PanelHint>
-        {mode === 'faithful'
-          ? 'Real-ESRGAN runs locally on the GPU with no creative restyling.'
-          : 'Cloud restoration — best for heavily damaged or very small images.'}
+        Real-ESRGAN runs locally on the GPU with no creative restyling.
       </PanelHint>
     </PanelShell>
   )

@@ -52,6 +52,8 @@ export function CanvasStage({ editor }: { editor: Editor }) {
     setEditingId,
     brush,
     magic,
+    magicPreview,
+    borderExpansionPreview,
     checkpoint,
   } = editor
 
@@ -59,6 +61,10 @@ export function CanvasStage({ editor }: { editor: Editor }) {
   const transformerRef = useRef<Konva.Transformer>(null)
   const [drawing, setDrawing] = useState<number[] | null>(null)
   const [toolbarRect, setToolbarRect] = useState<{ x: number; y: number; width: number; height: number } | null>(null)
+  const [comparePosition, setComparePosition] = useState(50)
+  const [acceptingPreview, setAcceptingPreview] = useState(false)
+  const magicHoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const lastMagicHover = useRef<string>('')
 
   const activeCandidate = magic.candidates[magic.index] ?? null
   const maskElement = useImageElement(activeCandidate ? `data:image/png;base64,${activeCandidate.mask}` : null)
@@ -81,6 +87,14 @@ export function CanvasStage({ editor }: { editor: Editor }) {
     [viewport, frame, zoom],
   )
 
+  const borderPreviewSize = useMemo(() => {
+    if (!borderExpansionPreview) return null
+    const maxWidth = Math.max(1, viewport.width - 72)
+    const maxHeight = Math.max(1, viewport.height - 72)
+    const width = Math.min(maxWidth, maxHeight * borderExpansionPreview.targetAspectRatio)
+    return { width, height: width / borderExpansionPreview.targetAspectRatio }
+  }, [borderExpansionPreview, viewport.height, viewport.width])
+
   // The canvas never pans, so zooming keeps the frame centred instead of anchoring to the cursor.
   const handleWheel = useCallback(
     (event: KonvaEventObject<WheelEvent>) => {
@@ -92,6 +106,55 @@ export function CanvasStage({ editor }: { editor: Editor }) {
   )
 
   const relativePointer = useCallback(() => stageRef.current?.getRelativePointerPosition() ?? null, [stageRef])
+
+  const clearMagicHover = useCallback(() => {
+    if (magicHoverTimer.current !== null) {
+      clearTimeout(magicHoverTimer.current)
+      magicHoverTimer.current = null
+    }
+  }, [])
+
+  const cancelMagicHoverPreview = useCallback(() => {
+    clearMagicHover()
+    // Leaving the actual image must cancel both the dwell timer and an
+    // in-flight SAM request. Resetting points makes MagicEditPanel abort it.
+    if (!magic.locked && magic.points.length) editor.resetMagic()
+  }, [clearMagicHover, editor, magic.locked, magic.points.length])
+
+  const queueMagicHover = useCallback(
+    (x: number, y: number) => {
+      const label: 1 = 1
+      const key = `${x}:${y}:${label}`
+      if (magic.locked || key === lastMagicHover.current) return
+
+      clearMagicHover()
+      magicHoverTimer.current = setTimeout(() => {
+        lastMagicHover.current = key
+        magicHoverTimer.current = null
+        // A hover previews one object at a time. Replacing the point also makes
+        // the previous mask disappear while SAM 3 resolves the next object.
+        editor.setMagic((current) => {
+          const currentPoint = current.points[0]
+          if (
+            current.points.length === 1 &&
+            currentPoint?.x === x &&
+            currentPoint.y === y &&
+            currentPoint.label === label
+          ) {
+            return current
+          }
+          return { ...current, points: [{ x, y, label }], candidates: [], index: 0, locked: false }
+        })
+      }, 350)
+    },
+    [clearMagicHover, editor, magic.locked],
+  )
+
+  useEffect(() => clearMagicHover, [clearMagicHover])
+
+  useEffect(() => {
+    if (!magic.points.length) lastMagicHover.current = ''
+  }, [magic.points.length])
 
   const handlePointerDown = useCallback(
     (event: KonvaEventObject<PointerEvent>) => {
@@ -110,6 +173,19 @@ export function CanvasStage({ editor }: { editor: Editor }) {
   )
 
   const handlePointerMove = useCallback(() => {
+    if (tool === 'magic-edit') {
+      if (magic.locked) return
+      const point = relativePointer()
+      if (!point) return
+      const x = Math.round(point.x - frame.x)
+      const y = Math.round(point.y - frame.y)
+      if (x < 0 || y < 0 || x >= frame.width || y >= frame.height) {
+        cancelMagicHoverPreview()
+        return
+      }
+      queueMagicHover(x, y)
+      return
+    }
     if (!drawing) return
     const point = relativePointer()
     if (!point) return
@@ -121,7 +197,7 @@ export function CanvasStage({ editor }: { editor: Editor }) {
       if (dx * dx + dy * dy < 4) return current
       return [...current, point.x, point.y]
     })
-  }, [drawing, relativePointer])
+  }, [cancelMagicHoverPreview, drawing, frame, magic.locked, queueMagicHover, relativePointer, tool])
 
   const handlePointerUp = useCallback(() => {
     if (!drawing) return
@@ -137,13 +213,62 @@ export function CanvasStage({ editor }: { editor: Editor }) {
       const x = Math.round(point.x - frame.x)
       const y = Math.round(point.y - frame.y)
       if (x < 0 || y < 0 || x >= frame.width || y >= frame.height) return
-      // Alt or Shift momentarily flips whichever mode the panel is set to.
-      const include = event.evt.altKey || event.evt.shiftKey ? !magic.include : magic.include
-      const label: 0 | 1 = include ? 1 : 0
-      editor.setMagic((current) => ({ ...current, points: [...current.points, { x, y, label }] }))
+      const clickedPointIndex = magic.points.findIndex(
+        (storedPoint) => (storedPoint.x - x) ** 2 + (storedPoint.y - y) ** 2 <= (12 / zoom) ** 2,
+      )
+
+      if (magic.locked) {
+        if (clickedPointIndex >= 0) {
+          clearMagicHover()
+          lastMagicHover.current = ''
+          editor.setMagic((current) => {
+            const points = current.points.filter((_, index) => index !== clickedPointIndex)
+            return { ...current, points, candidates: [], index: 0, locked: points.length > 0 }
+          })
+        } else {
+          // SAM 3 combines all positive points into one mask. Clicking another
+          // part of the same subject grows the locked selection without
+          // re-enabling hover previews.
+          editor.setMagic((current) => ({
+            ...current,
+            points: [...current.points, { x, y, label: 1 }],
+            candidates: [],
+            index: 0,
+            locked: true,
+          }))
+        }
+        return
+      }
+
+      const label: 1 = 1
+      clearMagicHover()
+      if (magic.candidates.length) {
+        // Keep the mask that was visible at the instant of the click.
+        editor.setMagic((current) => ({ ...current, locked: true }))
+        return
+      }
+
+      lastMagicHover.current = `${x}:${y}:${label}`
+      editor.setMagic((current) => {
+        const currentPoint = current.points[0]
+        if (
+          current.points.length === 1 &&
+          currentPoint?.x === x &&
+          currentPoint.y === y &&
+          currentPoint.label === label
+        ) {
+          return current
+        }
+        return { ...current, points: [{ x, y, label }], candidates: [], index: 0, locked: true }
+      })
     },
-    [editor, frame, magic.include, relativePointer, tool],
+    [clearMagicHover, editor, frame, magic.candidates.length, magic.locked, magic.points, relativePointer, tool, zoom],
   )
+
+  const handlePointerLeave = useCallback(() => {
+    cancelMagicHoverPreview()
+    handlePointerUp()
+  }, [cancelMagicHoverPreview, handlePointerUp])
 
   const nodeHandlers: NodeHandlers = useMemo(
     () => ({
@@ -199,6 +324,35 @@ export function CanvasStage({ editor }: { editor: Editor }) {
 
   const editingLayer = editingId ? doc.layers.find((layer) => layer.id === editingId) : null
   const cursor = tool === 'brush' || tool === 'magic-edit' ? 'crosshair' : 'default'
+  const magicPoint = magic.points.at(-1)
+  const findingObject = tool === 'magic-edit' && editor.busy === 'Finding the object…' && Boolean(magicPoint)
+
+  useEffect(() => {
+    setComparePosition(50)
+  }, [magicPreview])
+
+  const acceptMagicPreview = useCallback(async () => {
+    if (!magicPreview || acceptingPreview) return
+    setAcceptingPreview(true)
+    try {
+      await editor.replaceSource(magicPreview.afterBlob, editor.doc.source.name, {
+        preserveMagicSelection: true,
+      })
+      editor.setMagicPreview(null)
+    } catch (error) {
+      editor.setError(error instanceof Error ? error.message : 'Could not accept the Magic Edit result')
+    } finally {
+      setAcceptingPreview(false)
+    }
+  }, [acceptingPreview, editor, magicPreview])
+
+  const generationWords = editor.busy?.startsWith('Expanding')
+    ? ['Reading the scene edges…', 'Imagining new surroundings…', 'Matching light and texture…', 'Blending the expanded canvas…']
+    : editor.busy?.startsWith('Upscaling')
+      ? ['Recovering fine detail…', 'Refining the image…', 'Balancing texture and edges…', 'Finishing the upscale…']
+      : editor.busy?.startsWith('Painting')
+        ? ['Painting your new style…', 'Preserving the composition…', 'Layering the final details…', 'Finishing the artwork…']
+        : ['Working magic…', 'Generating your edit…', 'Preserving every detail…', 'Blending the final result…']
 
   return (
     <div ref={containerRef} className="relative min-h-0 flex-1 overflow-hidden bg-ed-stage">
@@ -216,7 +370,7 @@ export function CanvasStage({ editor }: { editor: Editor }) {
           onPointerDown={handlePointerDown}
           onPointerMove={handlePointerMove}
           onPointerUp={handlePointerUp}
-          onPointerLeave={handlePointerUp}
+          onPointerLeave={handlePointerLeave}
           onClick={handleClick}
         >
           <Layer>
@@ -360,13 +514,112 @@ export function CanvasStage({ editor }: { editor: Editor }) {
         />
       ) : null}
 
-      {editor.busy ? (
-        <div className="magic-generating-overlay absolute inset-0 z-30 grid place-items-center bg-black/55 backdrop-blur-[2px]">
-          <div className="flex flex-col items-center gap-3">
-            <span className="size-8 animate-spin rounded-full border-2 border-white/25 border-t-ed-accent" />
-            <span className="text-[12px] font-medium text-white">{editor.busy}</span>
-            <span className="relative h-0.5 w-40 overflow-hidden rounded-full bg-white/15">
-              <span className="magic-generate-progress absolute inset-y-0 w-1/3 rounded-full bg-ed-accent" />
+      {tool === 'border-expander' && borderExpansionPreview && borderPreviewSize && render.background ? (
+        <div className="pointer-events-none absolute inset-0 z-10 grid place-items-center bg-ed-stage/75 px-9 py-9">
+          <div
+            className="relative max-h-full max-w-full overflow-hidden rounded-[3px] bg-[#eee] shadow-2xl shadow-black/60"
+            style={{ width: borderPreviewSize.width, height: borderPreviewSize.height }}
+          >
+            <div className="absolute inset-0 bg-[repeating-linear-gradient(135deg,rgba(63,91,246,0.18)_0px,rgba(63,91,246,0.18)_12px,rgba(63,91,246,0.06)_12px,rgba(63,91,246,0.06)_24px)]" />
+            {/* The image uses contain sizing so its whole composition remains
+                visible; the patterned area is exactly what AI will generate. */}
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={render.background.src}
+              alt="Original image positioned inside the expanded print"
+              className="absolute inset-0 size-full object-contain shadow-[0_0_0_1px_rgba(255,255,255,0.8)]"
+            />
+            <span className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 rounded-full border border-ed-accent/35 bg-white/90 px-3 py-1.5 text-[9px] font-semibold uppercase tracking-[0.14em] text-ed-accent shadow-sm">
+              AI expands here
+            </span>
+          </div>
+        </div>
+      ) : null}
+
+      {magicPreview ? (
+        <section className="absolute inset-0 z-40 overflow-hidden bg-black" aria-label="Magic Edit comparison">
+          <img src={magicPreview.beforeUrl} alt="Before Magic Edit" className="absolute inset-0 size-full object-contain" />
+          <div
+            className="absolute inset-0 overflow-hidden"
+            style={{ clipPath: `inset(0 ${100 - comparePosition}% 0 0)` }}
+          >
+            <img src={magicPreview.afterUrl} alt="After Magic Edit" className="size-full object-contain" />
+          </div>
+          <div
+            className="pointer-events-none absolute inset-y-0 z-10 w-0.5 bg-white shadow-[0_0_10px_rgba(0,0,0,0.9)]"
+            style={{ left: `${comparePosition}%` }}
+          />
+          <input
+            aria-label="Before and after comparison"
+            type="range"
+            min="0"
+            max="100"
+            value={comparePosition}
+            onChange={(event) => setComparePosition(Number(event.target.value))}
+            className="absolute inset-0 z-20 h-full w-full cursor-ew-resize opacity-0"
+          />
+          <div className="absolute inset-x-0 bottom-5 z-30 flex justify-center gap-2">
+            <button
+              type="button"
+              onClick={() => editor.setMagicPreview(null)}
+              disabled={acceptingPreview}
+              className="rounded-[3px] border border-white/35 bg-black/70 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-white transition-colors hover:bg-black disabled:opacity-50"
+            >
+              Discard
+            </button>
+            <button
+              type="button"
+              onClick={() => void acceptMagicPreview()}
+              disabled={acceptingPreview}
+              className="rounded-[3px] bg-ed-accent px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-white transition-colors hover:brightness-110 disabled:opacity-50"
+            >
+              {acceptingPreview ? 'Accepting…' : 'Accept and continue'}
+            </button>
+          </div>
+          <div className="pointer-events-none absolute inset-x-0 top-4 z-30 flex justify-between px-4 text-[10px] font-semibold uppercase tracking-[0.12em] text-white drop-shadow">
+            <span>Before</span>
+            <span>After</span>
+          </div>
+        </section>
+      ) : null}
+
+      {findingObject && magicPoint ? (
+        <div
+          aria-label="Finding object"
+          className="pointer-events-none absolute z-30 grid size-7 place-items-center rounded-full border border-white/25 bg-black/65 shadow-lg shadow-black/50"
+          style={{
+            left: base.x + (frame.x + magicPoint.x) * zoom,
+            top: base.y + (frame.y + magicPoint.y) * zoom,
+            transform: 'translate(-50%, -50%)',
+          }}
+        >
+          <span className="size-4 animate-spin rounded-full border-2 border-white/25 border-t-ed-accent" />
+        </div>
+      ) : null}
+
+      {editor.busy && !findingObject ? (
+        <div className="magic-generating-overlay absolute inset-0 z-30 grid place-items-center overflow-hidden bg-black/55 backdrop-blur-md">
+          <span
+            aria-hidden
+            className="magic-generate-scan absolute inset-y-0 w-1/3 bg-gradient-to-r from-transparent via-ed-accent/35 to-transparent blur-2xl"
+          />
+          <div className="relative flex max-w-xs flex-col items-center px-6 text-center text-white">
+            <span className="relative grid size-16 place-items-center rounded-2xl border border-white/20 bg-white/10 shadow-2xl backdrop-blur-md">
+              <span className="size-7 animate-spin rounded-full border-2 border-white/25 border-t-ed-accent" />
+              <span className="absolute -inset-2 -z-10 animate-ping rounded-3xl border border-ed-accent/35" />
+            </span>
+            <div className="mt-6 h-7 overflow-hidden">
+              <div className="magic-generate-words">
+                {generationWords.map((word) => (
+                  <p key={word} className="h-7 text-lg font-semibold">
+                    {word}
+                  </p>
+                ))}
+              </div>
+            </div>
+            <p className="mt-2 text-xs leading-5 text-white/60">{editor.busy}</p>
+            <span className="mt-6 h-1 w-52 overflow-hidden rounded-full bg-white/15">
+              <span className="magic-generate-progress block h-full w-2/5 rounded-full bg-ed-accent shadow-[0_0_12px_rgba(63,91,246,0.8)]" />
             </span>
           </div>
         </div>

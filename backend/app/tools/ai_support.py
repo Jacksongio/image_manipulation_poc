@@ -203,20 +203,19 @@ def plan_upscale(width: int, height: int, scale: int, mode: UpscaleMode) -> Upsc
 
 
 def upscale_plans(width: int, height: int) -> list[dict[str, object]]:
-    """Every mode and scale combination the Upscaler panel can offer."""
+    """Every Local Faithful scale combination the Upscaler panel can offer."""
     plans: list[dict[str, object]] = []
-    for mode in ("faithful", "ai"):
-        for scale in (2, 4):
-            plan = plan_upscale(width, height, scale, mode)  # type: ignore[arg-type]
-            plans.append(
-                {
-                    "mode": mode,
-                    "scale": scale,
-                    "width": plan.width,
-                    "height": plan.height,
-                    "actualScale": round(plan.actual_scale, 3),
-                }
-            )
+    for scale in (2, 4):
+        plan = plan_upscale(width, height, scale, "faithful")
+        plans.append(
+            {
+                "mode": "faithful",
+                "scale": scale,
+                "width": plan.width,
+                "height": plan.height,
+                "actualScale": round(plan.actual_scale, 3),
+            }
+        )
     return plans
 
 

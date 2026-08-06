@@ -12,12 +12,18 @@ export function ArtStylePanel({
   setStyle,
   intensity,
   setIntensity,
+  model,
+  setModel,
+  models,
 }: {
   editor: Editor
   style: string
   setStyle: (value: string) => void
   intensity: string
   setIntensity: (value: string) => void
+  model: string
+  setModel: (value: string) => void
+  models: Array<{ id: string; label: string; detail: string }>
 }) {
   const run = useAiRun(editor)
   const { artStyles, styleIntensities } = editor.catalog.ai
@@ -53,12 +59,19 @@ export function ArtStylePanel({
         />
       </div>
 
+      <SegmentedControl
+        label="Model"
+        value={model}
+        options={models.map((entry) => ({ id: entry.id, name: entry.label }))}
+        onChange={setModel}
+      />
+
       <PanelButton
         tone="accent"
         disabled={Boolean(editor.busy)}
         onClick={() =>
           run(`Painting in ${active?.label ?? 'style'}…`, (flattened) =>
-            artStyle(flattened, editor.doc.source.name, style, intensity),
+            artStyle(flattened, editor.doc.source.name, style, intensity, model),
           )
         }
       >

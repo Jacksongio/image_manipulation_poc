@@ -11,6 +11,7 @@ import httpx
 
 
 MODEL_ID = os.getenv("GEMINI_IMAGE_MODEL", "gemini-3.1-flash-image")
+FLASH_LITE_IMAGE_MODEL = "gemini-3.1-flash-lite-image"
 MAX_RETRY_DELAY_SECONDS = 4.0
 
 
@@ -22,6 +23,36 @@ class GeminiError(RuntimeError):
 class GeminiImage:
     data: bytes
     mime_type: str
+
+
+def image_model_options() -> list[dict[str, str]]:
+    """The image models each Gemini-powered editor panel may select between."""
+    options = [
+        {
+            "id": MODEL_ID,
+            "label": "Current",
+            "detail": f"Configured model: {MODEL_ID}",
+        }
+    ]
+    if MODEL_ID != FLASH_LITE_IMAGE_MODEL:
+        options.append(
+            {
+                "id": FLASH_LITE_IMAGE_MODEL,
+                "label": "Flash Lite",
+                "detail": "Lower-cost 1K image editing",
+            }
+        )
+    return options
+
+
+def is_image_model_allowed(model_id: str) -> bool:
+    """Keep per-request model overrides limited to the exposed choices."""
+    return model_id in {option["id"] for option in image_model_options()}
+
+
+def image_output_size(model_id: str | None, preferred: Literal["1K", "2K", "4K"]) -> Literal["1K", "2K", "4K"]:
+    """Flash Lite supports 1K only; other choices retain the route's resolution."""
+    return "1K" if model_id == FLASH_LITE_IMAGE_MODEL else preferred
 
 
 def _retry_delay(response: httpx.Response | None, attempt: int) -> float:
@@ -44,6 +75,7 @@ async def edit_image(
     *,
     aspect_ratio: Literal["2:3", "3:2"] | None = None,
     image_size: Literal["1K", "2K", "4K"] | None = None,
+    model_id: str | None = None,
 ) -> GeminiImage:
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
@@ -85,7 +117,7 @@ async def edit_image(
             response: httpx.Response | None = None
             try:
                 response = await client.post(
-                    f"https://generativelanguage.googleapis.com/v1/models/{MODEL_ID}:generateContent",
+                    f"https://generativelanguage.googleapis.com/v1/models/{model_id or MODEL_ID}:generateContent",
                     headers={"Content-Type": "application/json", "x-goog-api-key": api_key},
                     json=payload,
                 )

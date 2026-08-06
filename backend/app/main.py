@@ -12,7 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from PIL import Image, ImageOps, UnidentifiedImageError
 
 from .config import MAX_IMAGE_BYTES, SUPPORTED_IMAGE_TYPES, cors_origins, frontend_dir
-from .gemini import GeminiError, edit_image
+from .gemini import GeminiError, edit_image, image_output_size, is_image_model_allowed
 from .prompts import (
     INTENSITY_DIRECTIONS,
     STYLE_DIRECTIONS,
@@ -159,12 +159,15 @@ async def art_style(
     image: Annotated[UploadFile, File()],
     style: Annotated[str, Form()],
     intensity: Annotated[str, Form()],
+    model: Annotated[str | None, Form()] = None,
 ) -> Response:
     data, mime_type = await read_image(image)
     if style not in STYLE_DIRECTIONS or intensity not in INTENSITY_DIRECTIONS:
         raise HTTPException(status_code=400, detail="Choose a supported style and intensity")
+    if model is not None and not is_image_model_allowed(model):
+        raise HTTPException(status_code=400, detail="Choose a supported image model")
     try:
-        result = await edit_image(art_style_prompt(style, intensity), [(data, mime_type)])
+        result = await edit_image(art_style_prompt(style, intensity), [(data, mime_type)], model_id=model)
     except GeminiError as error:
         raise gemini_failure(error) from error
     return image_response(result.data, result.mime_type)
@@ -176,6 +179,7 @@ async def magic_edit(
     mask: Annotated[UploadFile, File()],
     operation: Annotated[str, Form()],
     instruction: Annotated[str, Form()] = "",
+    model: Annotated[str | None, Form()] = None,
 ) -> Response:
     """``mask`` is the translucent overlay from /segment; it is hardened here."""
     if operation not in ("remove", "replace", "retouch"):
@@ -184,6 +188,8 @@ async def magic_edit(
         raise HTTPException(status_code=400, detail="Edit instructions must be 1,500 characters or fewer")
     if operation != "remove" and not instruction.strip():
         raise HTTPException(status_code=400, detail="Describe the requested edit")
+    if model is not None and not is_image_model_allowed(model):
+        raise HTTPException(status_code=400, detail="Choose a supported Magic Edit model")
 
     source_data, source_type = await read_image(image)
     mask_data, _ = await read_image(mask, force_png=True)
@@ -203,7 +209,7 @@ async def magic_edit(
             raise HTTPException(status_code=400, detail=str(error)) from error
 
     try:
-        result = await edit_image(magic_edit_prompt(operation, instruction.strip()), inputs)
+        result = await edit_image(magic_edit_prompt(operation, instruction.strip()), inputs, model_id=model)
     except GeminiError as error:
         raise gemini_failure(error) from error
     return image_response(result.data, result.mime_type)
@@ -214,9 +220,12 @@ async def border_expand(
     image: Annotated[UploadFile, File()],
     print_size: Annotated[str, Form()],
     orientation: Annotated[str, Form()],
+    model: Annotated[str | None, Form()] = None,
 ) -> Response:
     if print_size not in PRINT_SIZES or orientation not in ("portrait", "landscape"):
         raise HTTPException(status_code=400, detail="Choose a supported print size and orientation")
+    if model is not None and not is_image_model_allowed(model):
+        raise HTTPException(status_code=400, detail="Choose a supported image model")
     data, mime_type = await read_image(image)
     width, height = print_dimensions(print_size, orientation)
     aspect_ratio = "2:3" if orientation == "portrait" else "3:2"
@@ -225,7 +234,8 @@ async def border_expand(
             border_prompt(orientation, print_size, width, height),
             [(data, mime_type)],
             aspect_ratio=aspect_ratio,
-            image_size="2K",
+            image_size=image_output_size(model, "2K"),
+            model_id=model,
         )
     except GeminiError as error:
         raise gemini_failure(error) from error

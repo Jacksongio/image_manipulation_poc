@@ -13,14 +13,21 @@ export function BorderExpanderPanel({
   setPrintSize,
   orientation,
   setOrientation,
+  model,
+  setModel,
+  models,
 }: {
   editor: Editor
   printSize: string
   setPrintSize: (value: string) => void
   orientation: Orientation
   setOrientation: (value: Orientation) => void
+  model: string
+  setModel: (value: string) => void
+  models: Array<{ id: string; label: string; detail: string }>
 }) {
   const run = useAiRun(editor)
+  const { setBorderExpansionPreview } = editor
   const sizes = editor.catalog.ai.printSizes
   const rect = editor.render.crop
   const selected = sizes.find((entry) => entry.id === printSize) ?? sizes[0]
@@ -32,6 +39,13 @@ export function BorderExpanderPanel({
     setOrientation(isLandscape ? 'landscape' : 'portrait')
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isLandscape])
+
+  // The stage uses this ratio to place the complete source on the proposed
+  // print canvas and visibly mark the pixels that Border Expander will create.
+  useEffect(() => {
+    setBorderExpansionPreview({ targetAspectRatio: target.width / target.height })
+    return () => setBorderExpansionPreview(null)
+  }, [setBorderExpansionPreview, target.height, target.width])
 
   return (
     <PanelShell title="Border Expander">
@@ -68,6 +82,13 @@ export function BorderExpanderPanel({
         />
       </div>
 
+      <SegmentedControl
+        label="Model"
+        value={model}
+        options={models.map((entry) => ({ id: entry.id, name: entry.label }))}
+        onChange={setModel}
+      />
+
       <div className="rounded-[3px] border border-ed-line px-2 py-1.5">
         <span className="block text-[9px] uppercase tracking-[0.1em] text-ed-dim">Print output</span>
         <span className="mt-0.5 block text-[11px] tabular-nums text-ed-text">
@@ -82,7 +103,7 @@ export function BorderExpanderPanel({
           disabled={Boolean(editor.busy)}
           onClick={() =>
             run('Expanding borders…', (flattened) =>
-              borderExpand(flattened, editor.doc.source.name, selected.id, orientation),
+              borderExpand(flattened, editor.doc.source.name, selected.id, orientation, model),
             )
           }
         >

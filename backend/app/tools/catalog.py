@@ -13,6 +13,7 @@ from .focus_effects import FOCUS_TYPES
 from .fonts import DEFAULT_FAMILY, available_families
 from .geometry import ASPECT_PRESETS
 from .text_designs import TEXT_DESIGN_TEMPLATES
+from ..gemini import image_model_options
 
 #: Swatches offered by the Text, Text Design, and Brush colour rows.
 COLOR_SWATCHES: tuple[str, ...] = (
@@ -103,6 +104,7 @@ def build_catalog() -> dict[str, object]:
             "artStyles": [dict(entry) for entry in ART_STYLES],
             "styleIntensities": [dict(entry) for entry in STYLE_INTENSITIES],
             "magicEditOperations": [dict(entry) for entry in MAGIC_EDIT_OPERATIONS],
+            "imageModels": image_model_options(),
             "printSizes": _print_sizes_payload(),
             "upscaleScales": [2, 4],
         },
